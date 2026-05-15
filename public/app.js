@@ -98,11 +98,17 @@ async function loadSettings() {
 // ============ NAVIGATION ============
 function setupNav() {
   document.querySelectorAll('.nav-item').forEach(el => {
-    el.addEventListener('click', e => { e.preventDefault(); navigateTo(el.dataset.page); });
+    el.addEventListener('click', e => { e.preventDefault(); navigateTo(el.dataset.page); toggleSidebar(false); });
   });
-  document.getElementById('sidebarToggle').addEventListener('click', () => {
-    document.getElementById('sidebar').classList.toggle('open');
-  });
+  document.getElementById('sidebarToggle').addEventListener('click', () => toggleSidebar());
+}
+
+function toggleSidebar(force) {
+  const sb = document.getElementById('sidebar');
+  const ov = document.getElementById('sidebarOverlay');
+  const isOpen = force !== undefined ? force : !sb.classList.contains('open');
+  sb.classList.toggle('open', isOpen);
+  ov.classList.toggle('open', isOpen);
 }
 
 function navigateTo(page) {
