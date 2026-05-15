@@ -581,6 +581,11 @@ async function renderSettings(container) {
         </div>
       </div>
       <div class="card settings-section">
+        <h3><i class="ri-refresh-line"></i> System Update</h3>
+        <p style="font-size:0.85rem;color:var(--text-secondary);margin-bottom:12px;">Pull latest version from Git repository and restart server.</p>
+        <button type="button" class="btn btn-secondary" onclick="updateFromGit()"><i class="ri-git-pull-request-line"></i> Check & Update from Git</button>
+      </div>
+      <div class="card settings-section">
         <h3><i class="ri-database-2-line"></i> Data Management</h3>
         <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;">
           <a href="/api/backup" class="btn btn-secondary"><i class="ri-download-cloud-line"></i> Download Backup (.db)</a>
@@ -612,6 +617,23 @@ async function restoreBackup() {
     setTimeout(() => location.reload(), 2000);
   } else {
     toast('Restore failed: ' + res.error, 'error');
+  }
+}
+
+async function updateFromGit() {
+  if (!confirm('Are you sure you want to update from Git? The server will restart.')) return;
+  toast('Starting update... please wait', 'info');
+  try {
+    const res = await api('/api/system/update', { method: 'POST' });
+    if (res.success) {
+      toast('Update successful! Server is restarting...', 'success');
+      setTimeout(() => location.reload(), 5000);
+    } else {
+      toast('Update failed: ' + (res.error || 'Check logs'), 'error');
+    }
+  } catch (e) {
+    toast('Update triggered. Reloading in 10s...', 'info');
+    setTimeout(() => location.reload(), 10000);
   }
 }
 

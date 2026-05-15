@@ -246,6 +246,28 @@ app.post('/api/ping/:id', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+// System Update
+app.post('/api/system/update', (req, res) => {
+  const { exec } = require('child_process');
+  console.log('Starting system update...');
+  exec('git pull', (err, stdout, stderr) => {
+    if (err) return res.status(500).json({ error: err.message, stderr });
+    
+    // Optionally run npm install if package.json changed
+    exec('npm install', (err2, stdout2, stderr2) => {
+      if (err2) return res.status(500).json({ error: err2.message, stderr2 });
+      
+      res.json({ success: true, message: 'Update successful. Restarting server...', stdout: stdout + stdout2 });
+      
+      // Graceful restart (if running under PM2, it will auto-restart)
+      setTimeout(() => {
+        console.log('Restarting server for update...');
+        process.exit(0);
+      }, 2000);
+    });
+  });
+});
+
 // Backup & Restore
 app.get('/api/backup', (req, res) => {
   if (!fs.existsSync(DB_PATH)) return res.status(404).json({ error: 'DB file not found' });
