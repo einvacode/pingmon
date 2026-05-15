@@ -70,11 +70,14 @@ async function initDb() {
   db.run(`CREATE TABLE IF NOT EXISTS devices (
     id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, ip_address TEXT NOT NULL,
     location TEXT DEFAULT '', description TEXT DEFAULT '', group_name TEXT DEFAULT 'Default',
-    is_active INTEGER DEFAULT 1, is_muted INTEGER DEFAULT 0, status TEXT DEFAULT 'unknown', 
-    last_ping_ms REAL DEFAULT NULL, last_check TEXT DEFAULT NULL, 
+    is_active INTEGER DEFAULT 1, is_muted INTEGER DEFAULT 0, fail_count INTEGER DEFAULT 0,
+    status TEXT DEFAULT 'unknown', last_ping_ms REAL DEFAULT NULL, last_check TEXT DEFAULT NULL, 
     created_at TEXT DEFAULT (datetime('now','localtime')),
     updated_at TEXT DEFAULT (datetime('now','localtime'))
   )`);
+
+  // Migration: Add fail_count if it doesn't exist
+  try { db.run("ALTER TABLE devices ADD COLUMN fail_count INTEGER DEFAULT 0"); } catch (e) {}
 
   // Migration: Add is_muted if it doesn't exist
   try {
@@ -318,20 +321,32 @@ async function pingAllDevices() {
         const rt = result.alive ? parseFloat(result.time) : null;
         dbRun('INSERT INTO ping_logs (device_id, is_alive, response_time) VALUES (?, ?, ?)', [d.id, result.alive?1:0, rt]);
         const thresh = parseInt(getSetting('latency_threshold')) || 200;
-        const prev = d.status, next = result.alive ? 'up' : 'down';
-        const isWarning = next === 'up' && rt > thresh;
-        const currentStatus = isWarning ? 'warning' : next;
+        const prevStatus = d.status;
+        let nextStatus = prevStatus;
+        let nextFailCount = d.fail_count || 0;
 
-        dbRun(`UPDATE devices SET status=?, last_ping_ms=?, last_check=datetime('now','localtime'), updated_at=datetime('now','localtime') WHERE id=?`, [next, rt, d.id]);
-
-        if (prev !== 'unknown' && prev !== next) {
-          const type = next === 'down' ? 'down' : 'up';
-          const msg = next === 'down' ? `🔴 ${d.name} (${d.ip_address}) is DOWN!` : `🟢 ${d.name} (${d.ip_address}) is back UP.`;
-          dbRun('INSERT INTO alarms (device_id, type, message) VALUES (?, ?, ?)', [d.id, type, msg]);
+        if (result.alive) {
+          nextFailCount = 0;
+          nextStatus = (rt > thresh) ? 'warning' : 'up';
+        } else {
+          nextFailCount++;
+          if (nextFailCount >= 5) {
+            nextStatus = 'down';
+          }
         }
 
-        // Latency Warning Log
-        if (next === 'up' && isWarning && d.status !== 'warning') {
+        dbRun(`UPDATE devices SET status=?, last_ping_ms=?, last_check=datetime('now','localtime'), fail_count=?, updated_at=datetime('now','localtime') WHERE id=?`, 
+          [nextStatus, rt, nextFailCount, d.id]);
+
+        // Trigger Alarms only on transition to Down (at 5th fail) or back to Up
+        if (prevStatus !== 'down' && nextStatus === 'down') {
+          dbRun('INSERT INTO alarms (device_id, type, message) VALUES (?, ?, ?)', [d.id, 'down', `🔴 ${d.name} (${d.ip_address}) is DOWN (5x Fails)!`]);
+        } else if (prevStatus === 'down' && (nextStatus === 'up' || nextStatus === 'warning')) {
+          dbRun('INSERT INTO alarms (device_id, type, message) VALUES (?, ?, ?)', [d.id, 'up', `🟢 ${d.name} (${d.ip_address}) is back UP.`]);
+        }
+
+        // Latency Warning Log (independent of fail_count)
+        if (nextStatus === 'warning' && prevStatus !== 'warning' && prevStatus !== 'down') {
           dbRun('INSERT INTO alarms (device_id, type, message) VALUES (?, ?, ?)', [d.id, 'warning', `⚠️ ${d.name} (${d.ip_address}) high latency: ${rt}ms`]);
         }
       } catch (e) {}
