@@ -317,39 +317,35 @@ async function pingAllDevices() {
     const devices = dbAll('SELECT * FROM devices WHERE is_active = 1');
     for (const d of devices) {
       try {
-        const result = await ping.promise.probe(d.ip_address, { timeout: 5 });
-        const rt = result.alive ? parseFloat(result.time) : null;
-        dbRun('INSERT INTO ping_logs (device_id, is_alive, response_time) VALUES (?, ?, ?)', [d.id, result.alive?1:0, rt]);
+        const pingTasks = [];
+        for (let i = 0; i < 5; i++) {
+          pingTasks.push(ping.promise.probe(d.ip_address, { timeout: 2 }));
+        }
+        
+        const results = await Promise.all(pingTasks);
+        const bestResult = results.find(r => r.alive) || results[0];
+        const alive = results.some(r => r.alive);
+        const rt = alive ? parseFloat(bestResult.time) : null;
+        
+        dbRun('INSERT INTO ping_logs (device_id, is_alive, response_time) VALUES (?, ?, ?)', [d.id, alive?1:0, rt]);
+        
         const thresh = parseInt(getSetting('latency_threshold')) || 200;
         const prevStatus = d.status;
-        let nextStatus = prevStatus;
-        let nextFailCount = d.fail_count || 0;
+        let nextStatus = alive ? (rt > thresh ? 'warning' : 'up') : 'down';
 
-        if (result.alive) {
-          nextFailCount = 0;
-          nextStatus = (rt > thresh) ? 'warning' : 'up';
-        } else {
-          nextFailCount++;
-          if (nextFailCount >= 5) {
-            nextStatus = 'down';
-          }
-        }
+        dbRun(`UPDATE devices SET status=?, last_ping_ms=?, last_check=datetime('now','localtime'), updated_at=datetime('now','localtime') WHERE id=?`, 
+          [nextStatus, rt, d.id]);
 
-        dbRun(`UPDATE devices SET status=?, last_ping_ms=?, last_check=datetime('now','localtime'), fail_count=?, updated_at=datetime('now','localtime') WHERE id=?`, 
-          [nextStatus, rt, nextFailCount, d.id]);
-
-        // Trigger Alarms only on transition to Down (at 5th fail) or back to Up
         if (prevStatus !== 'down' && nextStatus === 'down') {
-          dbRun('INSERT INTO alarms (device_id, type, message) VALUES (?, ?, ?)', [d.id, 'down', `🔴 ${d.name} (${d.ip_address}) is DOWN (5x Fails)!`]);
+          dbRun('INSERT INTO alarms (device_id, type, message) VALUES (?, ?, ?)', [d.id, 'down', `🔴 ${d.name} (${d.ip_address}) is DOWN (Failed 5/5 pings)!`]);
         } else if (prevStatus === 'down' && (nextStatus === 'up' || nextStatus === 'warning')) {
           dbRun('INSERT INTO alarms (device_id, type, message) VALUES (?, ?, ?)', [d.id, 'up', `🟢 ${d.name} (${d.ip_address}) is back UP.`]);
         }
 
-        // Latency Warning Log (independent of fail_count)
         if (nextStatus === 'warning' && prevStatus !== 'warning' && prevStatus !== 'down') {
           dbRun('INSERT INTO alarms (device_id, type, message) VALUES (?, ?, ?)', [d.id, 'warning', `⚠️ ${d.name} (${d.ip_address}) high latency: ${rt}ms`]);
         }
-      } catch (e) {}
+      } catch (e) { console.error('Ping error:', e); }
     }
   } catch (e) {}
 }
