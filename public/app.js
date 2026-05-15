@@ -160,6 +160,7 @@ async function updateDashboardData() {
     // but for simplicity and to handle additions/removals, we re-render grid content 
     // only if data changed or periodically.
     renderDashboardGrid(data.devices);
+    updateTicker(data.devices);
     
     // Update alarms if present
     const alarmDiv = document.getElementById('dashAlarms');
@@ -218,6 +219,8 @@ async function pollAlarms() {
     // 2. Siren Logic (Current real-time status)
     // We check if ANY active, non-muted device is currently 'down'
     const dashboardData = await api('/api/dashboard');
+    updateTicker(dashboardData.devices);
+
     const hasActiveDown = dashboardData.devices.some(d => d.status === 'down' && d.is_active === 1 && d.is_muted === 0);
     
     if (hasActiveDown && settings.alarm_sound === '1') {
@@ -227,6 +230,28 @@ async function pollAlarms() {
     }
   } catch(e) { console.error('Poll error:', e); }
   setTimeout(pollAlarms, 10000);
+}
+
+function updateTicker(devices) {
+  const ticker = document.getElementById('tickerContainer');
+  const content = document.getElementById('tickerContent');
+  const thresh = parseInt(settings.latency_threshold) || 200;
+  
+  const warnings = devices.filter(d => d.is_active && (d.status === 'down' || (d.status === 'up' && d.last_ping_ms > thresh)));
+  
+  if (warnings.length === 0) {
+    ticker.style.display = 'none';
+    return;
+  }
+  
+  ticker.style.display = 'flex';
+  content.innerHTML = warnings.map(d => {
+    const isDown = d.status === 'down';
+    return `<div class="ticker-item ${isDown ? 'down' : ''}">
+      <i class="ri-${isDown ? 'error-warning' : 'alert'}-line"></i>
+      ${esc(d.name)} (${d.ip_address}): ${isDown ? 'OFFLINE' : d.last_ping_ms + 'ms'}
+    </div>`;
+  }).join('');
 }
 
 // ============ TOAST ============
